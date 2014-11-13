@@ -70,10 +70,14 @@ class Currency_rate_update_service(osv.Model):
                 # This RSS format is used by other national banks
                 #  (Thailand, Malaysia, Mexico...)
                 ('CA_BOC_getter', 'Bank of Canada - noon rates'),
+                ('bccr_getter', 'Banco Central de Costa Rica'),  # Added for CR rates
             ],
             "Webservice to use",
             required=True
         ),
+                
+        'automatic_update': fields.boolean('Automatic Update'),
+        'code_rate': fields.char('Code rate', size=64), # Just for Costa Rica web service
         # List of currency to update
         'currency_to_update': fields.many2many(
             'res.currency',
@@ -127,15 +131,27 @@ class Currency_rate_update(osv.Model):
     update currencies based on a web url"""
     _name = "currency.rate.update"
     _description = "Currency Rate Update"
-    # Dict that represent a cron object
-    nextcall_time = datetime.today() + timedelta(days=1)
-    nextcall = nextcall_time.strftime(DEFAULT_SERVER_DATETIME_FORMAT)
+    
+      #===================================================================
+    #===cron job  fields ===#
+    
+    columns={
+            'interval_number': fields.related('ir_cron_job_id', 'interval_number', type='integer', string='Interval Number',help="Repeat every x."),
+            'nextcall' : fields.related('ir_cron_job_id', 'nextcall', type='datetime', string='Next Execution Date', help="Next planned execution date for this job."),
+            'doall' : fields.related('ir_cron_job_id', 'doall', type='boolean', string='Repeat Missed', help="Specify if missed occurrences should be executed when the server restarts."),
+            'interval_type': fields.related('ir_cron_job_id', 'interval_type', type='selection', selection=[('minutes', 'Minutes'), ('hours', 'Hours'), ('work_days','Work Days'), ('days', 'Days'),('weeks', 'Weeks'), ('months', 'Months')], string='Interval Unit'),
+            'numbercall': fields.related('ir_cron_job_id', 'numbercall', type='integer', string='Number of Calls', help='How many times the method is called,\na negative number indicates no limit.'),
+            #===================================================================
+   }
+   # # Dict that represent a cron object
+    #nextcall_time = datetime.today() + timedelta(days=1)
+    #nextcall = nextcall_time.strftime(DEFAULT_SERVER_DATETIME_FORMAT) // version anterior (sin integrar)
     cron = {
         'active': False,
         'priority': 1,
         'interval_number': 1,
         'interval_type': 'weeks',
-        'nextcall': nextcall,
+        'nextcall':  time.strftime("%Y-%m-%d %H:%M:%S", (datetime.today() + timedelta(days=1)).timetuple() ),
         'numbercall': -1,
         'doall': True,
         'model': 'currency.rate.update',
@@ -326,6 +342,7 @@ class Currency_getter_factory():
             'Yahoo_getter',
             'Banxico_getter',
             'CA_BOC_getter',
+            'bccr_getter',
         ]
         if class_name in allowed:
             class_def = eval(class_name)
@@ -797,3 +814,108 @@ class CA_BOC_getter(Curreny_getter_interface):
                                      Bank of Canada - %s !' % str(curr))
 
         return self.updated_currency, self.log_info
+    
+#== Class to add CR rates  
+class bccr_getter(Currency_getter_factory):
+    
+    log_info = " "
+    
+    #Parse url
+    def get_url(self, url):
+        """Return a string of a get url query"""
+        try:
+            import urllib
+            objfile = urllib.urlopen(url)
+            rawfile = objfile.read()
+            objfile.close()
+            return rawfile
+        except ImportError:
+            raise osv.except_osv('Error !', self.MOD_NAME+'Unable to import urllib !')
+        except IOError:
+            raise osv.except_osv('Error !', self.MOD_NAME+'Web Service does not exist !')
+    
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
+        
+        logger2 = logging.getLogger('bccr_getter')
+        """implementation of abstract method of Curreny_getter_interface"""
+        today = time.strftime('%d/%m/%Y')
+        url1='http://indicadoreseconomicos.bccr.fi.cr/indicadoreseconomicos/WebServices/wsIndicadoresEconomicos.asmx/ObtenerIndicadoresEconomicos?tcNombre=clearcorp&tnSubNiveles=N&tcFechaFinal=' + today + '&tcFechaInicio='
+        url2='&tcIndicador='
+
+        from xml.dom.minidom import parseString
+        self.updated_currency_sale = {} #separate sale from purchase. Two different webservices
+        self.updated_currency_purchase = {}
+        
+        for curr in currency_array :
+            self.updated_currency_sale[curr] = {}
+            self.updated_currency_purchase [curr]= {}
+            
+            # Get the last rate for the selected currency
+            currency_obj = pooler.get_pool(cr.dbname).get('res.currency')
+            currency_rate_obj = pooler.get_pool(cr.dbname).get('res.currency.rate')            
+            currency_id = currency_obj.search(cr, uid, [('name','=',curr)])            
+            
+            if not currency_id:
+                continue            
+            
+            currency = currency_obj.browse(cr, uid, currency_id)[0] #only one currency
+            last_rate_id = currency_rate_obj.search(cr, uid, [('currency_id','in',currency_id)], order='name DESC', limit=1)
+            last_rate = currency_rate_obj.browse(cr, uid, last_rate_id)
+            if len(last_rate):
+                last_rate_date = last_rate[0].name
+                last_rate_date = datetime.strptime(last_rate_date,"%Y-%m-%d").strftime("%d/%m/%Y")
+            else:
+                last_rate_date = today
+
+            url = url1 + last_rate_date + url2            
+           
+            #=======Get code for sale and purchase rate
+            
+            #1. Sale rate code 
+            url_sale = url + currency.code_rate #sale rate for currency.               
+            if url_sale:
+                sale_list_rate = []
+                logger2.info(url_sale)
+                rawstring = self.get_url(url_sale)
+                dom = parseString(rawstring)
+                nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
+                for node in nodes:
+                    num_valor = node.getElementsByTagName('NUM_VALOR')
+                    if len(num_valor):
+                        rate = num_valor[0].firstChild.data
+                    else:
+                        continue
+                    des_fecha = node.getElementsByTagName('DES_FECHA')
+                    if len(des_fecha):
+                        date_str = des_fecha[0].firstChild.data.split('T')[0]
+                    else:
+                        continue
+                    if float(rate) > 0:
+                       self.updated_currency_sale[curr][date_str] = rate
+                        
+            #2. Purchase code rate
+            if currency.second_rate:
+                url_purchase = url + currency.second_code_rate #sale rate for currency. 
+                if url_purchase:
+                    purchase_list_rate = []
+                    logger2.info(url_purchase)
+                    rawstring = self.get_url(url_purchase)
+                    dom = parseString(rawstring)
+                    nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
+                    for node in nodes:
+                        num_valor = node.getElementsByTagName('NUM_VALOR')
+                        if len(num_valor):
+                            rate = num_valor[0].firstChild.data
+                        else:
+                            continue
+                        des_fecha = node.getElementsByTagName('DES_FECHA')
+                        if len(des_fecha):
+                            date_str = des_fecha[0].firstChild.data.split('T')[0]
+                        else:
+                            continue
+                        if float(rate) > 0:
+                            self.updated_currency_purchase[curr][date_str] = rate
+                           
+        logger2.info(self.updated_currency_sale) 
+        return self.updated_currency_sale, self.updated_currency_purchase, self.log_info
+
