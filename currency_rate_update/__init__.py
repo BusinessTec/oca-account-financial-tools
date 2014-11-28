@@ -22,6 +22,5 @@
 ##############################################################################
 
 import currency_rate_update
-#import res_currency
 import company
 import ir_cron

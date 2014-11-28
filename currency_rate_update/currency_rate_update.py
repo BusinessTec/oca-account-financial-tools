@@ -44,18 +44,21 @@ from datetime import datetime, timedelta
 from openerp.tools import DEFAULT_SERVER_DATETIME_FORMAT
 from openerp.tools import DEFAULT_SERVER_DATE_FORMAT
 from openerp.osv import fields, osv, orm
+from openerp import pooler 
 from openerp.tools.translate import _
+
+
 
 
 class Currency_rate_update(osv.Model):
     """Class that handle an ir cron call who will
-        update currencies based on a web url"""
-        
+    update currencies based on a web url"""
     _inherit = 'res.currency' 
     
     logger2 = logging.getLogger('currency.rate.update')
-    LOG_NAME = 'cron-rates'
-    MOD_NAME = 'c2c_currency_rate_update: '
+    #logger = netsvc.().#logger = logging.getLogger('_name_')#netsvc.Logger()
+    #LOG_NAME = 'cron-rates'
+    #MOD_NAME = 'c2c_currency_rate_update: '
     
     _description = "Currency Rate Update"
     _columns={
@@ -77,10 +80,8 @@ class Currency_rate_update(osv.Model):
                 ('bccr_getter', 'Banco Central de Costa Rica'),  # Added for CR rates
             ],
             "Webservice to use",
-            required=False
         ),
-        'code_rate': fields.char('Code rate', size=64), # Just for Costa Rica web service
-        
+        'code_rate': fields.char('Code rate', size=64), # Just for Costa Rica web service        
         'ir_cron_job_id': fields.many2one('ir.cron', 'Automatic Update Task',), 
         'automatic_update': fields.boolean('Automatic Update'),
         'interval_number': fields.related('ir_cron_job_id', 'interval_number', type='integer', string='Interval Number',help="Repeat every x."), 
@@ -94,7 +95,6 @@ class Currency_rate_update(osv.Model):
     _defaults = {
         'interval_type' : 'days',
     }
-    
     
     #===========================================================================
     # Create a generic method for cron_job creation
@@ -114,8 +114,7 @@ class Currency_rate_update(osv.Model):
         
         #Cron job name. "Clean" name for unnecessary characters. Avoid create
         #name as a tuple.
-        name.replace(')','')      
-        
+        name.replace(')','')
         res.update({'name': name})
         
         res.update ({
@@ -124,12 +123,12 @@ class Currency_rate_update(osv.Model):
                'interval_number': 1,
                'numbercall': -1,
                'doall': True,
-               'model': 'currency.rate.update', 
-               'function': 'run_currency_update_bccr',                                              
+               'model': 'res.currency', 
+               'function': 'run_currency_update',                                              
                'active':True,
                })
         
-        return res
+        return res  #se cae aca!!
     
     #===========================================================================
     """
@@ -191,12 +190,12 @@ class Currency_rate_update(osv.Model):
             cron_job_id = self.pool.get('ir.cron').create(cr, uid, cron_job, context=context)
             vals.update({'ir_cron_job_id': cron_job_id})
         
-        #return super(res.currency, self).write(cr, uid, ids, vals, context=context)        
-        return res
+        return super(res.currency, self).write(cr, uid, ids, vals, context=context)        
+        #return res
     
     
-    def run_currency_update(self, cr, uid, arg1=None): ## REVISAR DONDE SE LLAMA ESTO Y Q HACE EXACTAMENTE (13 nov 2014)
-
+    def run_currency_update(self, cr, uid, arg1=None): 
+        
         curr_obj = self.pool.get('res.currency')
         rate_obj = self.pool.get('res.currency.rate')
         
@@ -204,54 +203,69 @@ class Currency_rate_update(osv.Model):
         #Find currency 
         currency_id = curr_obj.browse(cr, uid,[arg1],context=None)[0]
         #Find service associated to currency
-        service = currency_id.web_service_associated
-              
-        #========Base currency
+        service = currency_id.webservice
+                  
+            #========Base currency
         res_currency_base_id = curr_obj.search(cr, uid, [('base', '=', True)])
-        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0]
-        
+        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0] 
+            
         factory = Currency_getter_factory()
         try :
-             #Initialize service class
-             getter = factory.register(service)
-             #get_update_currency return a dictionary with rate and name's currency 
-             #receive a array with currency to update
-             res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '') #main_currency for this method is not necessary
-                
-             #In res_currency_service, name is date when the rate is updated
-             for date, rate in res_sale[currency_id.name].iteritems():                
+                 #Initialize service class
+            getter = factory.register(service)
+                 #get_update_currency return a dictionary with rate and name's currency 
+                 #receive a array with currency to update
+            if service == 'bccr_getter':
+                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '') 
+            else:
+                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name],res_currency_base.id ) 
+            #In res_currency_service, name is date when the rate is updated
+            for date, rate in res_sale[currency_id.name].iteritems():                
                 rate_ids = rate_obj.search(cr, uid, [('currency_id','=',currency_id.id),('name','=',date)])
                 if not len(rate_ids):
-                     #sale rate
-                     rate = float(rate)
-                     if currency_id.sequence > res_currency_base.sequence:
-                         rate = 1.0/float(rate)
-                     vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
-                     
-             note = "Currency sale and purchase rate " + currency_id.name + " updated at %s "\
-                %(str(datetime.today()))
-             
-             self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(note))
-            
+                         #sale rate
+                        rate = float(rate)
+                         #if currency_id.sequence > res_currency_base.sequence:
+                            # rate = 1.0/float(rate)
+                        vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
+                         
+                            #purchase rate
+                        if currency_id.second_rate: #check if currency has second_rate activated option
+                             second_rate = res_purchase[currency_id.name][date]
+                             if currency_id.sequence > res_currency_base.sequence:
+                                 second_rate = 1.0/float(second_rate)
+                             vals.update({'second_rate': second_rate}) 
+                        else:
+                            vals.update({'second_rate': 0.0})                     
+                         
+                        x = rate_obj.create(cr, uid, vals)
+                         
+           # note = "Currency sale and purchase rate " + currency_id.name + " updated at %s "\
+            #        %(str(datetime.today()))
+                 
+                 #self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(note))
+                
         except Exception, e:
-             error_msg = "Error!" + "\n !!! %s %s !!!"\
-                 %(str(datetime.today()), str(e))
-             self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(e))
-    cron = {
-        'active': False,
-        'priority': 1,
-        'interval_number': 1,
-        'interval_type': 'weeks',
-        'nextcall':  time.strftime("%Y-%m-%d %H:%M:%S", (datetime.today() + timedelta(days=1)).timetuple() ),
-        'numbercall': -1,
-        'doall': True,
-        'model': 'Currency_rate_update',
-        'function': 'run_currency_update',
-        'args': '()',
-    }
-
-    LOG_NAME = 'cron-rates'
-    MOD_NAME = 'currency_rate_update: '
+                 error_msg = "Error!" + "\n !!! %s %s !!!"\
+                     %(str(datetime.today()), str(e))
+                # self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(e))
+    
+        cron = {
+                'active': False,
+                'priority': 1,
+                'interval_number': 1,
+                'interval_type': 'weeks',
+                'nextcall':  time.strftime("%Y-%m-%d %H:%M:%S", (datetime.today() + timedelta(days=1)).timetuple() ),
+                'numbercall': -1,
+                'doall': True,
+                'model': 'res.currency',
+                'function': 'run_currency_update',
+                'args': '()',
+        }
+        
+        LOG_NAME = 'cron-rates'
+        MOD_NAME = 'currency_rate_update: '       
+            
 
 def get_cron_id(self, cr, uid, context):
         """Returns the updater cron's id.
@@ -288,61 +302,6 @@ def save_cron(self, cr, uid, datas, context={}):
         """save the cron config data should be a dict"""
         cron_id = self.get_cron_id(cr, uid, context)
         return self.pool.get('ir.cron').write(cr, uid, [cron_id], datas)
-
-def run_currency_update(self, cr, uid):
-        "update currency at the given frequence"
-        curr_obj = self.pool.get('res.currency')
-        rate_obj = self.pool.get('res.currency.rate')
-        
-        #=======Currency to update
-        #Find currency 
-        currency_id = curr_obj.browse(cr, uid,[arg1],context=None)[0]
-        #Find service associated to currency
-        service = currency_id.web_service_associated
-              
-        #========Base currency
-        res_currency_base_id = curr_obj.search(cr, uid, [('base', '=', True)])
-        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0]
-        
-        factory = Currency_getter_factory()
-        try :
-             #Initialize service class
-             getter = factory.register(service)
-             #get_update_currency return a dictionary with rate and name's currency 
-             #receive a array with currency to update
-             res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '') #main_currency for this method is not necessary
-                
-             #In res_currency_service, name is date when the rate is updated
-             for date, rate in res_sale[currency_id.name].iteritems():                
-                rate_ids = rate_obj.search(cr, uid, [('currency_id','=',currency_id.id),('name','=',date)])
-                if not len(rate_ids):
-                     #sale rate
-                     rate = float(rate)
-                     if currency_id.sequence > res_currency_base.sequence:
-                         rate = 1.0/float(rate)
-                     vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
-                     
-                     #purchase rate 
-                     """  if currency_id.second_rate: #check if currency has second_rate activated option
-                         second_rate = res_purchase[currency_id.name][date]
-                         if currency_id.sequence > res_currency_base.sequence:
-                             second_rate = 1.0/float(second_rate)
-                         vals.update({'second_rate': second_rate}) 
-                     else:
-                        vals.update({'second_rate': 0.0})  """                   
-                     
-                     x = rate_obj.create(cr, uid, vals)
-                     
-             note = "Currency sale and purchase rate " + currency_id.name + " updated at %s "\
-                %(str(datetime.today()))
-             
-             self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(note))
-            
-        except Exception, e:
-             error_msg = "Error!" + "\n !!! %s %s !!!"\
-                 %(str(datetime.today()), str(e))
-             self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(e))
-
 
 class AbstractClassError(Exception):
     def __str__(self):
@@ -491,8 +450,7 @@ class Yahoo_getter(Curreny_getter_interface):
     for Yahoo finance service
     """
 
-    def get_updated_currency(self, currency_array, main_currency,
-                             max_delta_days):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         """implementation of abstract method of curreny_getter_interface"""
         self.validate_cur(main_currency)
         url = ('http://download.finance.yahoo.com/d/'
@@ -533,8 +491,7 @@ class Admin_ch_getter(Curreny_getter_interface):
         )
         return res
 
-    def get_updated_currency(self, currency_array, main_currency,
-                             max_delta_days):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         """Implementation of abstract method of Curreny_getter_interface"""
         url = ('http://www.afd.admin.ch/publicdb/newdb/'
                'mwst_kurse/wechselkurse.php')
@@ -615,8 +572,7 @@ class ECB_getter(Curreny_getter_interface):
         )
         return res
 
-    def get_updated_currency(self, currency_array, main_currency,
-                             max_delta_days):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         """implementation of abstract method of Curreny_getter_interface"""
         url = 'http://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml'
         # Important : as explained on the ECB web site, the currencies are
@@ -692,8 +648,7 @@ class PL_NBP_getter(Curreny_getter_interface):
         res['rate_ref'] = float(dom.xpath(xpath_rate_ref, namespaces=ns)[0])
         return res
 
-    def get_updated_currency(self, currency_array, main_currency,
-                             max_delta_days):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         """implementation of abstract method of Curreny_getter_interface"""
         # LastA.xml is always the most recent one
         url = 'http://www.nbp.pl/kursy/xml/LastA.xml'
@@ -773,8 +728,7 @@ class Banxico_getter(Curreny_getter_interface):
 
         return float(rate)
 
-    def get_updated_currency(self, currency_array, main_currency,
-                             max_delta_days=1):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         """implementation of abstract method of Curreny_getter_interface"""
         logger = logging.getLogger(__name__)
         # we do not want to update the main currency
@@ -807,8 +761,7 @@ class CA_BOC_getter(Curreny_getter_interface):
 
     """
 
-    def get_updated_currency(self, currency_array, main_currency,
-                             max_delta_days):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         """implementation of abstract method of Curreny_getter_interface"""
 
         # as of Jan 2014 BOC is publishing noon rates for about 60 currencies
@@ -868,7 +821,7 @@ class CA_BOC_getter(Curreny_getter_interface):
 
         return self.updated_currency, self.log_info
     
-#== Class to add Costa Rica rates  
+#== Class to add CR rates  
 class bccr_getter(Currency_getter_factory):
     
     log_info = " "
@@ -914,11 +867,11 @@ class bccr_getter(Currency_getter_factory):
             currency = currency_obj.browse(cr, uid, currency_id)[0] #only one currency
             last_rate_id = currency_rate_obj.search(cr, uid, [('currency_id','in',currency_id)], order='name DESC', limit=1)
             last_rate = currency_rate_obj.browse(cr, uid, last_rate_id)
-            if len(last_rate):
-                last_rate_date = last_rate[0].name
-                last_rate_date = datetime.strptime(last_rate_date,"%Y-%m-%d").strftime("%d/%m/%Y")
-            else:
-                last_rate_date = today
+           # if len(last_rate):
+            #    last_rate_date = last_rate[0].name
+            #    last_rate_date = datetime.strptime(last_rate_date,"%Y-%m-%d").strftime("%d/%m/%Y")
+            #else:
+            last_rate_date = today #esto en lo original va dentro del ELSE
 
             url = url1 + last_rate_date + url2            
            
