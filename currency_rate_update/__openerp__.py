@@ -30,7 +30,7 @@
     "category": "Financial Management/Configuration",
     "description": """Import exchange rates from the Internet.
 
-The module is able to use 4 different sources:
+The module is able to use 6 different sources:
 
 1. Admin.ch
    Updated daily, source in CHF.
@@ -55,6 +55,8 @@ The module is able to use 4 different sources:
 
 5. Banxico for USD & MXN (created by Agustín Cruz)
    Updated daily
+
+6. Banco Central Costa Rica, official rate for the money exchange to CR Currency (created by Clearcorp S.A)
 
 In the roadmap : Google Finance.
    Updated daily from Citibank N.A., source in EUR. Information may be delayed.
@@ -85,6 +87,7 @@ Thanks to main contributors: Grzegorz Grzelak, Alexis de Lattre
     "depends": [
         "base",
         "account",  # Added to ensure account security groups are present
+        
     ],
     "data": [
         "currency_rate_update.xml",
@@ -93,5 +96,5 @@ Thanks to main contributors: Grzegorz Grzelak, Alexis de Lattre
     ],
     "demo": [],
     "active": False,
-    'installable': False
+    'installable': True
 }

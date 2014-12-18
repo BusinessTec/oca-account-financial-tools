@@ -23,3 +23,4 @@
 
 import currency_rate_update
 import company
+import ir_cron
