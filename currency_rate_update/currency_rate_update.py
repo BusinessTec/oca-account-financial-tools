@@ -210,13 +210,16 @@ class Currency_rate_update(osv.Model):
         res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0] 
             
         factory = Currency_getter_factory()
+        
+        sr = self.pool.get('ir.module.module')
+        srr = sr.search(cr, uid, [('name', '=', 'currency_second_rate_BCCR'),('state', '=', 'installed')],count=True)
         try :
                  #Initialize service class
             getter = factory.register(service)
                  #get_update_currency return a dictionary with rate and name's currency 
                  #receive a array with currency to update
             if service == 'bccr_getter':
-                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '') 
+                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '',srr) 
             else:
                 res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name],res_currency_base.id ) 
             #In res_currency_service, name is date when the rate is updated
@@ -228,15 +231,14 @@ class Currency_rate_update(osv.Model):
                          #if currency_id.sequence > res_currency_base.sequence:
                             # rate = 1.0/float(rate)
                         vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
-                         
-                            #purchase rate
-                        if currency_id.second_rate: #check if currency has second_rate activated option
-                             second_rate = res_purchase[currency_id.name][date]
-                             if currency_id.sequence > res_currency_base.sequence:
-                                 second_rate = 1.0/float(second_rate)
-                             vals.update({'second_rate': second_rate}) 
-                        else:
-                            vals.update({'second_rate': 0.0})                     
+                        if srr:
+                            if currency_id.second_rate: #check if currency has second_rate activated option
+                                 second_rate = res_purchase[currency_id.name][date]
+                                 if currency_id.sequence > res_currency_base.sequence:
+                                     second_rate = 1.0/float(second_rate)
+                                 vals.update({'second_rate': second_rate}) 
+                            else:
+                                vals.update({'second_rate': 0.0})                     
                          
                         x = rate_obj.create(cr, uid, vals)
                          
@@ -840,7 +842,7 @@ class bccr_getter(Currency_getter_factory):
         except IOError:
             raise osv.except_osv('Error !', self.MOD_NAME+'Web Service does not exist !')
     
-    def get_updated_currency(self, cr, uid, currency_array, main_currency):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency,secondRate):
         
         logger2 = logging.getLogger('bccr_getter')
         """implementation of abstract method of Curreny_getter_interface"""
@@ -900,27 +902,28 @@ class bccr_getter(Currency_getter_factory):
                        self.updated_currency_sale[curr][date_str] = rate
                         
             #2. Purchase code rate
-            if currency.second_rate:
-                url_purchase = url + currency.second_code_rate #sale rate for currency. 
-                if url_purchase:
-                    purchase_list_rate = []
-                    logger2.info(url_purchase)
-                    rawstring = self.get_url(url_purchase)
-                    dom = parseString(rawstring)
-                    nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
-                    for node in nodes:
-                        num_valor = node.getElementsByTagName('NUM_VALOR')
-                        if len(num_valor):
-                            rate = num_valor[0].firstChild.data
-                        else:
-                            continue
-                        des_fecha = node.getElementsByTagName('DES_FECHA')
-                        if len(des_fecha):
-                            date_str = des_fecha[0].firstChild.data.split('T')[0]
-                        else:
-                            continue
-                        if float(rate) > 0:
-                            self.updated_currency_purchase[curr][date_str] = rate
+            if secondRate:
+                if currency.second_rate:
+                    url_purchase = url + currency.second_code_rate #sale rate for currency. 
+                    if url_purchase:
+                        purchase_list_rate = []
+                        logger2.info(url_purchase)
+                        rawstring = self.get_url(url_purchase)
+                        dom = parseString(rawstring)
+                        nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
+                        for node in nodes:
+                            num_valor = node.getElementsByTagName('NUM_VALOR')
+                            if len(num_valor):
+                                rate = num_valor[0].firstChild.data
+                            else:
+                                continue
+                            des_fecha = node.getElementsByTagName('DES_FECHA')
+                            if len(des_fecha):
+                                date_str = des_fecha[0].firstChild.data.split('T')[0]
+                            else:
+                                continue
+                            if float(rate) > 0:
+                                self.updated_currency_purchase[curr][date_str] = rate
                            
         logger2.info(self.updated_currency_sale) 
         return self.updated_currency_sale, self.updated_currency_purchase, self.log_info
