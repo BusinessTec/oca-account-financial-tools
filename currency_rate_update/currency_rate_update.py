@@ -225,34 +225,28 @@ class Currency_rate_update(osv.Model):
             #In res_currency_service, name is date when the rate is updated
             for date, rate in res_sale[currency_id.name].iteritems():                
                 rate_ids = rate_obj.search(cr, uid, [('currency_id','=',currency_id.id),('name','=',date)])
-                if not len(rate_ids):
-                         #sale rate
-                        rate = float(rate)
-                         #if currency_id.sequence > res_currency_base.sequence:
-                            # rate = 1.0/float(rate)
-                        vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
-                        if srr:
-                            if currency_id.second_rate: #check if currency has second_rate activated option
-                                 second_rate = res_purchase[currency_id.name][date]
-                                 if currency_id.sequence > res_currency_base.sequence:
-                                     second_rate = 1.0/float(second_rate)
-                                 vals.update({'second_rate': second_rate}) 
-                            else:
-                                vals.update({'second_rate': 0.0})                     
-                         
-                        x = rate_obj.create(cr, uid, vals)
-                         
-           # note = "Currency sale and purchase rate " + currency_id.name + " updated at %s "\
-            #        %(str(datetime.today()))
-                 
-                 #self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(note))
+                rate = float(rate)
+                if currency_id.sequence == True: # res_currency_base.sequence:
+                    rate = 1.0/float(rate)
+                vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
+                if srr:
+                    if currency_id.second_rate: #check if currency has second_rate activated option
+                        second_rate = res_purchase[currency_id.name][date]
+                        if currency_id.sequence == True: #res_currency_base.sequence:
+                            second_rate = 1.0/float(second_rate)
+                        vals.update({'value_second_rate': second_rate}) 
+                    else:
+                           vals.update({'value_second_rate': 0.0})  
                 
+                if not len(rate_ids):
+                    x = rate_obj.create(cr, uid, vals)
+                else:
+                   x = rate_obj.write(cr,uid, rate_ids, vals, context=None)
         except Exception, e:
                  error_msg = "Error!" + "\n !!! %s %s !!!"\
                      %(str(datetime.today()), str(e))
-                # self.logger.notifyChannel(self.LOG_NAME, netsvc.LOG_INFO, str(e))
     
-        cron = {
+"""        cron = {
                 'active': False,
                 'priority': 1,
                 'interval_number': 1,
@@ -266,7 +260,7 @@ class Currency_rate_update(osv.Model):
         }
         
         LOG_NAME = 'cron-rates'
-        MOD_NAME = 'currency_rate_update: '       
+        MOD_NAME = 'currency_rate_update: '""" 
             
 
 def get_cron_id(self, cr, uid, context):
@@ -869,9 +863,9 @@ class bccr_getter(Currency_getter_factory):
             currency = currency_obj.browse(cr, uid, currency_id)[0] #only one currency
             last_rate_id = currency_rate_obj.search(cr, uid, [('currency_id','in',currency_id)], order='name DESC', limit=1)
             last_rate = currency_rate_obj.browse(cr, uid, last_rate_id)
-           # if len(last_rate):
-            #    last_rate_date = last_rate[0].name
-            #    last_rate_date = datetime.strptime(last_rate_date,"%Y-%m-%d").strftime("%d/%m/%Y")
+            #if len(last_rate):
+             #   last_rate_date = last_rate[0].name
+                #last_rate_date = datetime.strptime(last_rate_date,"%Y-%m-%d")
             #else:
             last_rate_date = today #esto en lo original va dentro del ELSE
 
@@ -925,6 +919,7 @@ class bccr_getter(Currency_getter_factory):
                             if float(rate) > 0:
                                 self.updated_currency_purchase[curr][date_str] = rate
                            
-        logger2.info(self.updated_currency_sale) 
+        logger2.info(self.updated_currency_sale)
+        logger2.info(self.updated_currency_purchase) 
         return self.updated_currency_sale, self.updated_currency_purchase, self.log_info
 
