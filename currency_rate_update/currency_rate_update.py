@@ -46,6 +46,7 @@ from openerp.tools import DEFAULT_SERVER_DATE_FORMAT
 from openerp.osv import fields, osv, orm
 from openerp import pooler 
 from openerp.tools.translate import _
+from openerp.exceptions import Warning
 
 class Currency_rate_update(osv.Model):
     """Class that handle an ir cron call who will
@@ -164,15 +165,12 @@ class Currency_rate_update(osv.Model):
                                     update[key] = vals[key]                    
                             update.update({'active':vals['automatic_update']})
                             self.pool.get('ir.cron').write(cr, uid, [cron_job_id], update, context=context)
-                                                
                     #Don't unlink cron_job. It will pass to inactive state
                     elif currency_obj.ir_cron_job_id:
                         update_cron = {'active': False}
                         self.pool.get('ir.cron').write(cr, uid, [currency_obj.ir_cron_job_id.id], update_cron, context=context)
-   
         return super(Currency_rate_update, self).write(cr, uid, ids, vals, context=context)
-    #===========================================================================
-    
+
     def create(self, cr, uid, vals, context={}):  
         cron_job = {}
         #First create currency
@@ -186,11 +184,9 @@ class Currency_rate_update(osv.Model):
             #create cron_job
             cron_job_id = self.pool.get('ir.cron').create(cr, uid, cron_job, context=context)
             vals.update({'ir_cron_job_id': cron_job_id})
-        
-        return super(res.currency, self).write(cr, uid, ids, vals, context=context)        
-        #return res
-    
-    
+            self.write(cr, uid, ids, vals, context=context)
+        return res
+
     def run_currency_update(self, cr, uid, arg1=None): 
         
         curr_obj = self.pool.get('res.currency')
@@ -204,7 +200,9 @@ class Currency_rate_update(osv.Model):
                   
             #========Base currency
         res_currency_base_id = curr_obj.search(cr, uid, [('base', '=', True)])
-        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0] 
+        if not res_currency_base_id:
+            raise Warning(_('There is no base currency set'))
+        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0]
             
         factory = Currency_getter_factory()
         new_rate_ids = []
@@ -222,7 +220,11 @@ class Currency_rate_update(osv.Model):
             for date, rate in res_sale[currency_id.name].iteritems():
                 rate_ids = rate_obj.search(cr, uid, [('currency_id','=',currency_id.id),('name','=',date)])
                 rate = float(rate)
-                vals = {'currency_id': currency_id.id, 'rate': rate, 'name': date}
+                if currency_id.sequence:
+                    rate = 1.0/rate
+                    vals = {'currency_id': currency_id.id, 'rate': rate, 'name': date}
+                else:
+                    vals = {'currency_id': currency_id.id, 'rate': rate, 'name': date}
                 if not len(rate_ids):
                     new_rate_ids.append(rate_obj.create(cr, uid, vals))
                 else:
