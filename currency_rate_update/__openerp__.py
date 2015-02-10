@@ -87,6 +87,7 @@ Thanks to main contributors: Grzegorz Grzelak, Alexis de Lattre
     "depends": [
         "base",
         "account",  # Added to ensure account security groups are present
+        "res_currency_priority",
         
     ],
     "data": [

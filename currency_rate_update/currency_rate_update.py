@@ -37,7 +37,6 @@
 # a webservice to the list of currencies supported by the Webservice
 # TODO : implement max_delta_days for Yahoo webservice
 
-from openerp import netsvc
 import logging
 import time
 from datetime import datetime, timedelta
@@ -46,9 +45,7 @@ from openerp.tools import DEFAULT_SERVER_DATE_FORMAT
 from openerp.osv import fields, osv, orm
 from openerp import pooler 
 from openerp.tools.translate import _
-
-
-
+from openerp.exceptions import Warning
 
 class Currency_rate_update(osv.Model):
     """Class that handle an ir cron call who will
@@ -81,7 +78,7 @@ class Currency_rate_update(osv.Model):
             ],
             "Webservice to use",
         ),
-        'code_rate': fields.char('Code rate', size=64), # Just for Costa Rica web service        
+        'code_rate': fields.char('Code rate', size=64), # Just for Costa Rica web service
         'ir_cron_job_id': fields.many2one('ir.cron', 'Automatic Update Task',), 
         'automatic_update': fields.boolean('Automatic Update'),
         'interval_number': fields.related('ir_cron_job_id', 'interval_number', type='integer', string='Interval Number',help="Repeat every x."), 
@@ -128,7 +125,7 @@ class Currency_rate_update(osv.Model):
                'active':True,
                })
         
-        return res  #se cae aca!!
+        return res
     
     #===========================================================================
     """
@@ -167,15 +164,12 @@ class Currency_rate_update(osv.Model):
                                     update[key] = vals[key]                    
                             update.update({'active':vals['automatic_update']})
                             self.pool.get('ir.cron').write(cr, uid, [cron_job_id], update, context=context)
-                                                
                     #Don't unlink cron_job. It will pass to inactive state
                     elif currency_obj.ir_cron_job_id:
                         update_cron = {'active': False}
                         self.pool.get('ir.cron').write(cr, uid, [currency_obj.ir_cron_job_id.id], update_cron, context=context)
-   
         return super(Currency_rate_update, self).write(cr, uid, ids, vals, context=context)
-    #===========================================================================
-    
+
     def create(self, cr, uid, vals, context={}):  
         cron_job = {}
         #First create currency
@@ -189,11 +183,9 @@ class Currency_rate_update(osv.Model):
             #create cron_job
             cron_job_id = self.pool.get('ir.cron').create(cr, uid, cron_job, context=context)
             vals.update({'ir_cron_job_id': cron_job_id})
-        
-        return super(res.currency, self).write(cr, uid, ids, vals, context=context)        
-        #return res
-    
-    
+            self.write(cr, uid, ids, vals, context=context)
+        return res
+
     def run_currency_update(self, cr, uid, arg1=None): 
         
         curr_obj = self.pool.get('res.currency')
@@ -207,61 +199,40 @@ class Currency_rate_update(osv.Model):
                   
             #========Base currency
         res_currency_base_id = curr_obj.search(cr, uid, [('base', '=', True)])
-        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0] 
+        if not res_currency_base_id:
+            raise Warning(_('There is no base currency set'))
+        res_currency_base = curr_obj.browse(cr, uid, res_currency_base_id)[0]
             
         factory = Currency_getter_factory()
+        new_rate_ids = []
         
-        sr = self.pool.get('ir.module.module')
-        srr = sr.search(cr, uid, [('name', '=', 'currency_second_rate_BCCR'),('state', '=', 'installed')],count=True)
-        try :
+        try:
                  #Initialize service class
             getter = factory.register(service)
                  #get_update_currency return a dictionary with rate and name's currency 
                  #receive a array with currency to update
             if service == 'bccr_getter':
-                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '',srr) 
+                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '',False) 
             else:
-                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name],res_currency_base.id ) 
+                res_sale, log_info = getter.get_updated_currency(cr, uid, [currency_id.name],res_currency_base.name)
             #In res_currency_service, name is date when the rate is updated
-            for date, rate in res_sale[currency_id.name].iteritems():                
+            for date, rate in res_sale[currency_id.name].iteritems():
                 rate_ids = rate_obj.search(cr, uid, [('currency_id','=',currency_id.id),('name','=',date)])
                 rate = float(rate)
-                if currency_id.sequence == True: # res_currency_base.sequence:
-                    rate = 1.0/float(rate)
-                vals = {'currency_id': currency_id.id, 'rate': rate, 'name': datetime.strptime(date,"%Y-%m-%d")}
-                if srr:
-                    if currency_id.second_rate: #check if currency has second_rate activated option
-                        second_rate = res_purchase[currency_id.name][date]
-                        if currency_id.sequence == True: #res_currency_base.sequence:
-                            second_rate = 1.0/float(second_rate)
-                        vals.update({'value_second_rate': second_rate}) 
-                    else:
-                           vals.update({'value_second_rate': 0.0})  
-                
-                if not len(rate_ids):
-                    x = rate_obj.create(cr, uid, vals)
+                if currency_id.sequence:
+                    rate = 1.0/rate
+                    vals = {'currency_id': currency_id.id, 'rate': rate, 'name': date}
                 else:
-                   x = rate_obj.write(cr,uid, rate_ids, vals, context=None)
-        except Exception, e:
-                 error_msg = "Error!" + "\n !!! %s %s !!!"\
-                     %(str(datetime.today()), str(e))
-    
-"""        cron = {
-                'active': False,
-                'priority': 1,
-                'interval_number': 1,
-                'interval_type': 'weeks',
-                'nextcall':  time.strftime("%Y-%m-%d %H:%M:%S", (datetime.today() + timedelta(days=1)).timetuple() ),
-                'numbercall': -1,
-                'doall': True,
-                'model': 'res.currency',
-                'function': 'run_currency_update',
-                'args': '()',
-        }
-        
-        LOG_NAME = 'cron-rates'
-        MOD_NAME = 'currency_rate_update: '""" 
-            
+                    vals = {'currency_id': currency_id.id, 'rate': rate, 'name': date}
+                if not len(rate_ids):
+                    new_rate_ids.append(rate_obj.create(cr, uid, vals))
+                else:
+                    rate_obj.write(cr,uid, rate_ids, vals, context=None)
+                    new_rate_ids += rate_ids
+            self.logger2.info('Update finished...')
+            return new_rate_ids
+        except Exception as e:
+            self.logger2.info("Unable to update %s, %s" % (currency_id.name, str(e)))
 
 def get_cron_id(self, cr, uid, context):
         """Returns the updater cron's id.
@@ -461,9 +432,7 @@ class Yahoo_getter(Curreny_getter_interface):
                 self.updated_currency[curr] = val
             else:
                 raise Exception('Could not update the %s' % (curr))
-
         return self.updated_currency, self.log_info
-
 
 # Admin CH ####################################################################
 class Admin_ch_getter(Curreny_getter_interface):
@@ -836,7 +805,7 @@ class bccr_getter(Currency_getter_factory):
         except IOError:
             raise osv.except_osv('Error !', self.MOD_NAME+'Web Service does not exist !')
     
-    def get_updated_currency(self, cr, uid, currency_array, main_currency,secondRate):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency, secondRate):
         
         logger2 = logging.getLogger('bccr_getter')
         """implementation of abstract method of Curreny_getter_interface"""
@@ -854,11 +823,11 @@ class bccr_getter(Currency_getter_factory):
             
             # Get the last rate for the selected currency
             currency_obj = pooler.get_pool(cr.dbname).get('res.currency')
-            currency_rate_obj = pooler.get_pool(cr.dbname).get('res.currency.rate')            
-            currency_id = currency_obj.search(cr, uid, [('name','=',curr)])            
+            currency_rate_obj = pooler.get_pool(cr.dbname).get('res.currency.rate')
+            currency_id = currency_obj.search(cr, uid, [('name','=',curr)])
             
             if not currency_id:
-                continue            
+                continue
             
             currency = currency_obj.browse(cr, uid, currency_id)[0] #only one currency
             last_rate_id = currency_rate_obj.search(cr, uid, [('currency_id','in',currency_id)], order='name DESC', limit=1)
@@ -867,14 +836,13 @@ class bccr_getter(Currency_getter_factory):
              #   last_rate_date = last_rate[0].name
                 #last_rate_date = datetime.strptime(last_rate_date,"%Y-%m-%d")
             #else:
-            last_rate_date = today #esto en lo original va dentro del ELSE
-
-            url = url1 + last_rate_date + url2            
+            last_rate_date = today
+            last_rate_datetime = time.strftime('%Y-%m-%d %H:%M:%S')
+            url = url1 + last_rate_date + url2
            
             #=======Get code for sale and purchase rate
-            
             #1. Sale rate code 
-            url_sale = url + currency.code_rate #sale rate for currency.               
+            url_sale = url + currency.code_rate #sale rate for currency.
             if url_sale:
                 sale_list_rate = []
                 logger2.info(url_sale)
@@ -893,7 +861,7 @@ class bccr_getter(Currency_getter_factory):
                     else:
                         continue
                     if float(rate) > 0:
-                       self.updated_currency_sale[curr][date_str] = rate
+                       self.updated_currency_sale[curr][last_rate_datetime] = rate
                         
             #2. Purchase code rate
             if secondRate:
@@ -917,9 +885,8 @@ class bccr_getter(Currency_getter_factory):
                             else:
                                 continue
                             if float(rate) > 0:
-                                self.updated_currency_purchase[curr][date_str] = rate
+                                self.updated_currency_purchase[curr][last_rate_datetime] = rate
                            
         logger2.info(self.updated_currency_sale)
         logger2.info(self.updated_currency_purchase) 
         return self.updated_currency_sale, self.updated_currency_purchase, self.log_info
-
