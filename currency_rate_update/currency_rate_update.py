@@ -211,12 +211,9 @@ class Currency_rate_update(osv.Model):
             getter = factory.register(service)
                  #get_update_currency return a dictionary with rate and name's currency 
                  #receive a array with currency to update
-            if service == 'bccr_getter':
-                res_sale, res_purchase, log_info = getter.get_updated_currency(cr, uid, [currency_id.name], '',False) 
-            else:
-                res_sale, log_info = getter.get_updated_currency(cr, uid, [currency_id.name],res_currency_base.name)
+            res, log_info = getter.get_updated_currency(cr, uid, [currency_id.name],res_currency_base.name)
             #In res_currency_service, name is date when the rate is updated
-            for date, rate in res_sale[currency_id.name].iteritems():
+            for date, rate in res[currency_id.name].iteritems():
                 rate_ids = rate_obj.search(cr, uid, [('currency_id','=',currency_id.id),('name','=',date)])
                 rate = float(rate)
                 if currency_id.sequence:
@@ -787,7 +784,7 @@ class CA_BOC_getter(Curreny_getter_interface):
         return self.updated_currency, self.log_info
     
 #== Class to add CR rates  
-class bccr_getter(Currency_getter_factory):
+class bccr_getter(Curreny_getter_interface):
     
     log_info = " "
     
@@ -805,7 +802,7 @@ class bccr_getter(Currency_getter_factory):
         except IOError:
             raise osv.except_osv('Error !', self.MOD_NAME+'Web Service does not exist !')
     
-    def get_updated_currency(self, cr, uid, currency_array, main_currency, secondRate):
+    def get_updated_currency(self, cr, uid, currency_array, main_currency):
         
         logger2 = logging.getLogger('bccr_getter')
         """implementation of abstract method of Curreny_getter_interface"""
@@ -814,13 +811,11 @@ class bccr_getter(Currency_getter_factory):
         url2='&tcIndicador='
 
         from xml.dom.minidom import parseString
-        self.updated_currency_sale = {} #separate sale from purchase. Two different webservices
-        self.updated_currency_purchase = {}
+        self.updated_currency = {} 
+
         
         for curr in currency_array :
-            self.updated_currency_sale[curr] = {}
-            self.updated_currency_purchase [curr]= {}
-            
+            self.updated_currency[curr] = {}
             # Get the last rate for the selected currency
             currency_obj = pooler.get_pool(cr.dbname).get('res.currency')
             currency_rate_obj = pooler.get_pool(cr.dbname).get('res.currency.rate')
@@ -840,53 +835,25 @@ class bccr_getter(Currency_getter_factory):
             last_rate_datetime = time.strftime('%Y-%m-%d %H:%M:%S')
             url = url1 + last_rate_date + url2
            
-            #=======Get code for sale and purchase rate
-            #1. Sale rate code 
-            url_sale = url + currency.code_rate #sale rate for currency.
-            if url_sale:
-                sale_list_rate = []
-                logger2.info(url_sale)
-                rawstring = self.get_url(url_sale)
-                dom = parseString(rawstring)
-                nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
-                for node in nodes:
-                    num_valor = node.getElementsByTagName('NUM_VALOR')
-                    if len(num_valor):
-                        rate = num_valor[0].firstChild.data
-                    else:
-                        continue
-                    des_fecha = node.getElementsByTagName('DES_FECHA')
-                    if len(des_fecha):
-                        date_str = des_fecha[0].firstChild.data.split('T')[0]
-                    else:
-                        continue
-                    if float(rate) > 0:
-                       self.updated_currency_sale[curr][last_rate_datetime] = rate
-                        
-            #2. Purchase code rate
-            if secondRate:
-                if currency.second_rate:
-                    url_purchase = url + currency.second_code_rate #sale rate for currency. 
-                    if url_purchase:
-                        purchase_list_rate = []
-                        logger2.info(url_purchase)
-                        rawstring = self.get_url(url_purchase)
-                        dom = parseString(rawstring)
-                        nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
-                        for node in nodes:
-                            num_valor = node.getElementsByTagName('NUM_VALOR')
-                            if len(num_valor):
-                                rate = num_valor[0].firstChild.data
-                            else:
-                                continue
-                            des_fecha = node.getElementsByTagName('DES_FECHA')
-                            if len(des_fecha):
-                                date_str = des_fecha[0].firstChild.data.split('T')[0]
-                            else:
-                                continue
-                            if float(rate) > 0:
-                                self.updated_currency_purchase[curr][last_rate_datetime] = rate
-                           
-        logger2.info(self.updated_currency_sale)
-        logger2.info(self.updated_currency_purchase) 
-        return self.updated_currency_sale, self.updated_currency_purchase, self.log_info
+            #=======Get code for rate
+            url = url + currency.code_rate 
+            list_rate = []
+            logger2.info(url)
+            rawstring = self.get_url(url)
+            dom = parseString(rawstring)
+            nodes = dom.getElementsByTagName('INGC011_CAT_INDICADORECONOMIC')
+            for node in nodes:
+                num_valor = node.getElementsByTagName('NUM_VALOR')
+                if len(num_valor):
+                    rate = num_valor[0].firstChild.data
+                else:
+                    continue
+                des_fecha = node.getElementsByTagName('DES_FECHA')
+                if len(des_fecha):
+                    date_str = des_fecha[0].firstChild.data.split('T')[0]
+                else:
+                    continue
+                if float(rate) > 0:
+                   self.updated_currency[curr][last_rate_datetime] = rate   
+        logger2.info(self.updated_currency)
+        return self.updated_currency, self.log_info
